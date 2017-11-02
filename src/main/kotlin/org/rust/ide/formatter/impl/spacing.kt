@@ -8,6 +8,7 @@ package org.rust.ide.formatter.impl
 import com.intellij.formatting.ASTBlock
 import com.intellij.formatting.Block
 import com.intellij.formatting.Spacing
+import com.intellij.formatting.Spacing.createKeepingFirstColumnSpacing
 import com.intellij.formatting.Spacing.createSpacing
 import com.intellij.formatting.SpacingBuilder
 import com.intellij.lang.ASTNode
@@ -150,6 +151,9 @@ fun Block.computeSpacing(child1: Block?, child2: Block, ctx: RsFmtContext): Spac
         // #[attr]\n<comment>\n => #[attr] <comment>\n etc.
             psi1 is RsOuterAttr && psi2 is PsiComment
             -> return createSpacing(1, 1, 0, true, 0)
+
+            psi2 is PsiComment
+            -> return createKeepingFirstColumnSpacing(0, Int.MAX_VALUE, true, 0)
 
         // Determine spacing between macro invocation and it's arguments
             parentPsi is RsMacroCall && elementType1 == EXCL
