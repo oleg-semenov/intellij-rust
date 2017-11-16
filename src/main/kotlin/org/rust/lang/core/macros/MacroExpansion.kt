@@ -6,59 +6,74 @@
 package org.rust.lang.core.macros
 
 import com.intellij.psi.PsiElement
-import com.intellij.psi.tree.IElementType
-import org.rust.lang.core.psi.*
+import com.intellij.psi.PsiFileFactory
+import com.intellij.psi.util.PsiTreeUtil
+import org.rust.lang.RsFileType
+import org.rust.lang.core.psi.RsFile
+import org.rust.lang.core.psi.RsMacroCall
+import org.rust.lang.core.psi.RsMacroDefinition
 import org.rust.lang.core.psi.ext.RsElement
-import org.rust.lang.core.psi.ext.elementType
 import org.rust.lang.core.psi.ext.macroName
 
-fun expandMacro(call: RsMacroCall): ExpansionResult? {
-    if (call.macroName != "lazy_static") return null
-    val arg = call.macroArgument?.tt ?: return null
-    val ctx = call.context as? RsElement ?: return null
-
-    val lazyStaticCall = parseLazyStaticCall(arg) ?: return null
-    return RsCodeFragmentFactory(ctx.project)
-        .createExpandedItem<RsConstant>(
-            "${if (lazyStaticCall.pub) "pub " else ""}static ${lazyStaticCall.identifier}: ${lazyStaticCall.type} = &${lazyStaticCall.expr};",
-            ctx
-        )
+fun expandMacro(call: RsMacroCall): List<ExpansionResult>? {
+    if (call.macroName == "lazy_static") return expandLazyStatic(call)?.let { listOf(it) }
+    val def = call.reference.resolve() as? RsMacroDefinition ?: return null
+    return expandMacro(def, call)
 }
 
-private data class LazyStaticCall(
-    val pub: Boolean,
-    val identifier: String,
-    val type: String,
-    val expr: String
-)
+private fun expandMacro(def: RsMacroDefinition, call: RsMacroCall): List<ExpansionResult>? {
+    val case = def.macroDefinitionBody?.
+        macroDefinitionCaseList?.singleOrNull()
+        ?: return null
 
-private fun parseLazyStaticCall(tt: RsTt): LazyStaticCall? {
-    // static ref FOO: Foo = Foo::new();
-    val pub = tt.firstToken(RsElementTypes.PUB) != null
-    val ident = tt.firstToken(RsElementTypes.IDENTIFIER) ?: return null
-    val colon = tt.firstToken(RsElementTypes.COLON) ?: return null
-    val eq = tt.firstToken(RsElementTypes.EQ) ?: return null
-    val semi = tt.firstToken(RsElementTypes.SEMICOLON) ?: return null
+    val patGroup = case.macroPattern.macroBindingGroupList.singleOrNull()
+        ?: return null
+    val patBinding = patGroup.macroBindingList.singleOrNull()
+        ?: return null
+    val name = patBinding.colon.prevSibling?.text
+    val type = patBinding.colon.nextSibling?.text
+    if (!(name != null && type != null && type == "item")) return null
 
-    val typeStart = colon.textRange.endOffset - tt.textRange.startOffset
-    val typeEnd = eq.textRange.startOffset - tt.textRange.startOffset
-    if (typeStart >= typeEnd) return null
-    val typeText = tt.text.substring(typeStart, typeEnd)
+    val expGroup = case.macroExpansion.macroExpansionReferenceGroupList.singleOrNull()
+        ?: return null
+    val expansionText = expGroup.textBetweenParens(expGroup.lparen, expGroup.rparen)?.toString() ?: return null
 
-    val exprStart = eq.textRange.endOffset - tt.textRange.startOffset
-    val exprEnd = semi.textRange.startOffset - tt.textRange.startOffset
-    if (exprStart >= exprEnd) return null
-    val exprText = tt.text.substring(exprStart, exprEnd)
-
-    return LazyStaticCall(pub, ident.text, typeText, exprText)
-}
-
-
-private fun RsTt.firstToken(type: IElementType): PsiElement? {
-    var child = firstChild
-    while (child != null) {
-        if (child.elementType == type) return child
-        child = child.nextSibling
+    val items = parseBodyAsItemList(call) ?: return null
+    val newText = items.joinToString("\n\n") { item ->
+        expansionText.replace("$" + name, item.text)
     }
-    return null
+
+    val expandedFile = PsiFileFactory.getInstance(call.project)
+        .createFileFromText(
+            "MACRO.rs",
+            RsFileType,
+            newText
+        ) as? RsFile ?: return null
+
+    val ctx = call.context as? RsElement ?: return null
+    return PsiTreeUtil.getChildrenOfTypeAsList(expandedFile, ExpansionResult::class.java)
+        .onEach { it.setContext(ctx) }
+}
+
+fun parseBodyAsItemList(call: RsMacroCall): List<RsElement>? {
+    val text = call.macroArgument?.braceListBodyText() ?: return null
+    val file = PsiFileFactory.getInstance(call.project).createFileFromText(
+        "macro_scratch_space.rs",
+        RsFileType,
+        text
+    ) as? RsFile ?: return null
+
+    return PsiTreeUtil.getChildrenOfTypeAsList(file, RsElement::class.java)
+}
+
+private fun PsiElement.braceListBodyText(): CharSequence? {
+    return textBetweenParens(firstChild, lastChild)
+}
+
+private fun PsiElement.textBetweenParens(bra: PsiElement?, ket: PsiElement?): CharSequence? {
+    if (bra == null || ket == null || bra == ket) return null
+    return containingFile.text.subSequence(
+        bra.textRange.endOffset + 1,
+        ket.textRange.startOffset
+    )
 }

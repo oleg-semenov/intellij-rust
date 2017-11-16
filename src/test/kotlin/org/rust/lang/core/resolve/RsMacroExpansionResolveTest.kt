@@ -23,4 +23,28 @@ class RsMacroExpansionResolveTest: RsResolveTestBase() {
             FOO.bar()
         }      //^
     """)
+
+    val d = '$'
+    fun `test expand items star`() = checkByCode("""
+        macro_rules! if_std {
+            ($d(${d}i:item)*) => ($d(
+                #[cfg(feature = "use_std")]
+                ${d}i
+            )*)
+        }
+
+        struct Foo;
+        impl Foo {
+            fn bar(&self) {}
+        }     //X
+
+        if_std! {
+            fn foo() -> Foo { Foo }
+        }
+
+        fn main() {
+            foo().bar()
+        }       //^
+
+    """)
 }

@@ -603,9 +603,10 @@ private fun processItemDeclarations(scope: RsItemsOwner, ns: Set<Namespace>, ori
     }
 
     for (macro in scope.macroCallList) {
-        val item = macro.expansion as? RsNamedElement ?: continue
-        val name = item.name ?: continue
-        if (processor(name, item)) return true
+        for (item in macro.expansion.orEmpty()) {
+            val name = (item as? RsNamedElement)?.name ?: continue
+            if (processor(name, item)) return true
+        }
     }
 
     fun processMultiResolveWithNs(name: String, ref: RsReference, processor: RsResolveProcessor): Boolean {
